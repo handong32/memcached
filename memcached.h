@@ -676,6 +676,7 @@ typedef struct _io_wrap {
 struct conn {
     sasl_conn_t *sasl_conn;
     int    sfd;
+    unsigned long long tsc_start;
     bool sasl_started;
     bool authenticated;
     bool set_stale;

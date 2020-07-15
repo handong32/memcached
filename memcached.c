@@ -60,6 +60,28 @@
 #include <sys/sysctl.h>
 #endif
 
+inline unsigned long long rdtsc()
+{
+  unsigned long long tsc;
+  asm volatile("rdtsc;"
+               "shl $32,%%rdx;"
+	       "or %%rdx,%%rax"
+               : "=a"(tsc)
+               :
+               : "%rcx", "%rdx");
+  return tsc;
+}
+
+struct conn_stats {
+    int sfd;
+    int id;
+    unsigned long long start;
+    unsigned long long end;
+};
+#define MAX_CONN_STATS 4096
+struct conn_stats cat_conn_stats[MAX_CONN_STATS];
+int conn_stats_count = 0;
+
 /*
  * forward declarations
  */
@@ -751,6 +773,7 @@ conn *conn_new(const int sfd, enum conn_states init_state,
     stats.total_conns++;
     STATS_UNLOCK();
 
+    c->tsc_start = rdtsc();
     MEMCACHED_CONN_ALLOCATE(c->sfd);
 
     return c;
@@ -935,6 +958,11 @@ static void conn_close(conn *c) {
     close(c->sfd);
     pthread_mutex_lock(&conn_lock);
     allow_new_conns = true;
+    cat_conn_stats[conn_stats_count].end = rdtsc();
+    cat_conn_stats[conn_stats_count].sfd = c->sfd;
+    cat_conn_stats[conn_stats_count].id = conn_stats_count;
+    cat_conn_stats[conn_stats_count].start = c->tsc_start;
+    conn_stats_count ++;
     pthread_mutex_unlock(&conn_lock);
 
     STATS_LOCK();
@@ -8292,6 +8320,19 @@ static void sig_usrhandler(const int sig) {
     stop_main_loop = GRACE_STOP;
 }
 
+static void sig_usr2handler(const int sig) {
+    int i;
+    //printf("conn_stats_count %d\n", conn_stats_count);
+    printf("id sfd tsc_start tsc_end\n");
+    for(i=0;i<conn_stats_count;i++) {
+        printf("%d %d %llu %llu\n",
+               cat_conn_stats[i].id, cat_conn_stats[i].sfd,
+               cat_conn_stats[i].start, cat_conn_stats[i].end);
+    }
+    memset(cat_conn_stats, 0, sizeof(cat_conn_stats));
+    conn_stats_count = 0;
+}
+
 #ifndef HAVE_SIGIGNORE
 static int sigignore(int sig) {
     struct sigaction sa = { .sa_handler = SIG_IGN, .sa_flags = 0 };
@@ -8906,6 +8947,7 @@ int main (int argc, char **argv) {
     signal(SIGTERM, sig_handler);
     signal(SIGHUP, sighup_handler);
     signal(SIGUSR1, sig_usrhandler);
+    signal(SIGUSR2, sig_usr2handler);
 
     /* init settings */
     settings_init();
